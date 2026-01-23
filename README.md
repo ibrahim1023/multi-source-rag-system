@@ -59,9 +59,5 @@ python -m pytest
 
 ## Repo Map
 
-- `scope.md`: project scope, architecture, milestones, and tooling.
-- `tasks.md`: step-by-step checklist.
-- `AGENTS.md`: contributor guidance and standards.
-- `docs/`: architecture notes and decisions.
 - `src/`: Python implementation.
 - `tests/`: unit tests.
