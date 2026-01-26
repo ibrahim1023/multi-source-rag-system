@@ -28,6 +28,18 @@ class InMemoryVectorStore:
         scored.sort(key=lambda item: item[0], reverse=True)
         return [record for _, record in scored[:limit]]
 
+    def search_with_scores(
+        self,
+        query_vector: list[float],
+        limit: int = 5,
+    ) -> list[tuple[VectorRecord, float]]:
+        scored = [
+            (record, self._cosine_similarity(query_vector, record.vector))
+            for record in self._records
+        ]
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return scored[:limit]
+
     @staticmethod
     def _cosine_similarity(a: list[float], b: list[float]) -> float:
         dot = sum(x * y for x, y in zip(a, b))
