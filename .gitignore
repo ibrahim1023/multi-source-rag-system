@@ -1,9 +1,11 @@
 .env
 AGENTS.md
 
+skills/conventional-commit-drafter/
+
 tests/__pycache__/
 src/multi_rag/__pycache__/
 src/multi_rag/pipeline/__pycache__
-skills/conventional-commit-drafter/
 src/multi_rag/indexing/__pycache__/
 src/multi_rag/retrieval/__pycache__/
+src/multi_rag/answering/__pycache__/

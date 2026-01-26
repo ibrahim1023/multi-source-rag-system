@@ -39,3 +39,30 @@ class RawDocument:
     origin: str
     text: str
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class Citation:
+    doc_id: str
+    chunk_id: str
+    title: str
+    origin: str
+    section_path: Optional[str] = None
+    snippet: str = ""
+
+
+@dataclass
+class Claim:
+    text: str
+    citations: list[Citation] = field(default_factory=list)
+
+
+@dataclass
+class AnswerResponse:
+    answer: str
+    claims: list[Claim] = field(default_factory=list)
+    citations: list[Citation] = field(default_factory=list)
+    confidence: float = 0.0
+    mode: str = "low"
+    follow_up_question: Optional[str] = None
+    refused: bool = False

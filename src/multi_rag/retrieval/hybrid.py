@@ -8,6 +8,7 @@ from multi_rag.indexing.bm25 import BM25Index
 from multi_rag.indexing.embeddings import EmbeddingProvider
 from multi_rag.indexing.metadata_store import InMemoryMetadataStore
 from multi_rag.indexing.vector_store import InMemoryVectorStore, VectorRecord
+from multi_rag.models import Chunk
 
 
 @dataclass
@@ -70,6 +71,53 @@ class HybridRetriever:
 
         scored.sort(key=lambda item: item.score, reverse=True)
         return scored[:top_k]
+
+    def assemble_context(
+        self,
+        results: list[RetrievalResult],
+        *,
+        max_chunks: int = 6,
+        neighbor_window: int = 1,
+    ) -> list[Chunk]:
+        context: list[Chunk] = []
+        seen: set[str] = set()
+        for result in results:
+            if len(context) >= max_chunks:
+                break
+            chunk = self._metadata_store.get_chunk(result.chunk_id)
+            if not chunk:
+                continue
+            for candidate in self._expand_section_window(chunk, neighbor_window):
+                if candidate.chunk_id in seen:
+                    continue
+                seen.add(candidate.chunk_id)
+                context.append(candidate)
+                if len(context) >= max_chunks:
+                    break
+        return context
+
+    def _expand_section_window(self, chunk: Chunk, neighbor_window: int) -> list[Chunk]:
+        if neighbor_window <= 0:
+            return [chunk]
+
+        chunks = self._metadata_store.list_chunks(chunk.doc_id)
+        if not chunks:
+            return [chunk]
+
+        target_index = None
+        for idx, candidate in enumerate(chunks):
+            if candidate.chunk_id == chunk.chunk_id:
+                target_index = idx
+                break
+        if target_index is None:
+            return [chunk]
+
+        start = max(target_index - neighbor_window, 0)
+        end = min(target_index + neighbor_window, len(chunks) - 1)
+        window = chunks[start:end + 1]
+        if chunk.section_path:
+            window = [item for item in window if item.section_path == chunk.section_path]
+        return window
 
 
 def _matches_filter(metadata: dict, filters: dict) -> bool:

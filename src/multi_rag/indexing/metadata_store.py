@@ -24,6 +24,9 @@ class InMemoryMetadataStore:
     def get_chunk(self, chunk_id: str) -> Chunk | None:
         return self._chunks.get(chunk_id)
 
+    def list_chunks(self, doc_id: str) -> list[Chunk]:
+        chunks = [chunk for chunk in self._chunks.values() if chunk.doc_id == doc_id]
+        return sorted(chunks, key=lambda item: item.chunk_index)
 
 @dataclass
 class PostgresConfig:
@@ -137,3 +140,30 @@ class PostgresMetadataStore:
                 ),
             )
             conn.commit()
+
+    def list_chunks(self, doc_id: str) -> list[Chunk]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT chunk_id, doc_id, chunk_text, chunk_index, section_path,
+                       start_offset, end_offset, metadata
+                FROM {self._config.chunks_table}
+                WHERE doc_id = %s
+                ORDER BY chunk_index
+                """,
+                (doc_id,),
+            )
+            rows = cur.fetchall()
+        return [
+            Chunk(
+                chunk_id=row[0],
+                doc_id=row[1],
+                chunk_text=row[2],
+                chunk_index=row[3],
+                section_path=row[4],
+                start_offset=row[5],
+                end_offset=row[6],
+                metadata=row[7] or {},
+            )
+            for row in rows
+        ]
