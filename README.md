@@ -7,7 +7,7 @@ code documentation.
 ## What This Repo Is
 
 - A scoped plan and build checklist for a demo-ready RAG product.
-- A Python implementation in progress focused on the data pipeline.
+- A split backend/frontend implementation (FastAPI + Next.js).
 
 ## Implemented So Far
 
@@ -16,6 +16,7 @@ code documentation.
   metadata store, and an indexer service for wiring them together.
 - Answering: grounded answerer with citations, confidence, and refusal policy.
 - API: FastAPI app with ingest, search, and chat endpoints.
+- UI: Next.js ingestion console with job history view.
 - Unit tests for pipeline, indexing, retrieval, answering, and API.
 
 ## Usage Example
@@ -50,33 +51,58 @@ indexer.index_document(document, chunks)
 
 ## Setup
 
-1. Copy `.env.example` to `.env`.
+Backend:
+
+1. Copy `backend/.env.example` to `backend/.env`.
 2. Fill in required variables for local services.
-3. Install dependencies: `python -m pip install -e .`
+3. Install dependencies: `python -m pip install -e backend`
 
-## Formatting (Pre-commit)
+If you want higher-quality embeddings, set:
 
-1. `python -m pip install pre-commit`
-2. `pre-commit install`
+```
+EMBEDDING_PROVIDER=sentence-transformer
+EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
+```
 
-Prettier will run on staged files when you commit.
+Frontend:
+
+1. Copy `frontend/.env.local.example` to `frontend/.env.local`.
+2. Install dependencies: `cd frontend && npm install`
 
 ## Run Tests
 
 ```bash
+cd backend
 python -m pytest
 ```
 
 ## Run API
 
 ```bash
+cd backend
 PYTHONPATH=src uvicorn multi_rag.api.app:create_app --factory
 ```
 
 If you want Postgres-backed metadata, set `DATABASE_URL` (and optionally
-`METADATA_BACKEND=postgres`) in your `.env`.
+`METADATA_BACKEND=postgres`) in your `backend/.env`.
+
+## Run Frontend
+
+```bash
+cd frontend
+npm run dev
+```
+
+## Uploading Files
+
+Use the file upload endpoint for PDFs:
+
+- `POST /ingest/pdf/file`
+
+It expects `multipart/form-data` with `title`, `origin`, optional `metadata`
+JSON string, and `file`.
 
 ## Repo Map
 
-- `src/`: Python implementation.
-- `tests/`: unit tests.
+- `backend/`: Python implementation.
+- `frontend/`: Next.js ingestion console.

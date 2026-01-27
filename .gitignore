@@ -1,14 +1,17 @@
 .env
-AGENTS.md
 
 skills/conventional-commit-drafter/
 
-tests/__pycache__/
-src/multi_rag/__pycache__/
-src/multi_rag/pipeline/__pycache__
-src/multi_rag/indexing/__pycache__/
-src/multi_rag/retrieval/__pycache__/
-src/multi_rag/answering/__pycache__/
-src/multi_rag/observability/__pycache__/
-src/multi_rag/api/__pycache__/
-src/multi_rag.egg-info/
+backend/tests/__pycache__/
+backend/src/multi_rag/__pycache__/
+backend/src/multi_rag/pipeline/__pycache__/
+backend/src/multi_rag/indexing/__pycache__/
+backend/src/multi_rag/retrieval/__pycache__/
+backend/src/multi_rag/answering/__pycache__/
+backend/src/multi_rag/observability/__pycache__/
+backend/src/multi_rag/api/__pycache__/
+backend/src/multi_rag.egg-info/
+
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local

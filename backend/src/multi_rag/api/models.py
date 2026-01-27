@@ -21,6 +21,36 @@ class IngestResponse(BaseModel):
     chunks_indexed: int
 
 
+class IngestJobModel(BaseModel):
+    job_id: str
+    source_type: str
+    title: str
+    origin: str
+    status: str
+    error: str | None = None
+    created_at: str
+
+
+class IngestStatusResponse(BaseModel):
+    jobs: list[IngestJobModel]
+
+
+class DocumentModel(BaseModel):
+    doc_id: str
+    source_type: str
+    title: str
+    origin: str
+    owner: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    tags: list[str]
+    access_scope: str | None = None
+
+
+class DocumentListResponse(BaseModel):
+    documents: list[DocumentModel]
+
+
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5

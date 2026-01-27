@@ -24,6 +24,9 @@ class InMemoryMetadataStore:
     def get_chunk(self, chunk_id: str) -> Chunk | None:
         return self._chunks.get(chunk_id)
 
+    def list_documents(self) -> list[Document]:
+        return list(self._documents.values())
+
     def list_chunks(self, doc_id: str) -> list[Chunk]:
         chunks = [chunk for chunk in self._chunks.values() if chunk.doc_id == doc_id]
         return sorted(chunks, key=lambda item: item.chunk_index)
@@ -113,6 +116,12 @@ class PostgresMetadataStore:
 
     def upsert_chunk(self, chunk: Chunk) -> None:
         with self._connect() as conn, conn.cursor() as cur:
+            try:
+                from psycopg.types.json import Json
+            except ImportError as exc:  # pragma: no cover - runtime only
+                raise RuntimeError(
+                    "psycopg is required for PostgresMetadataStore."
+                ) from exc
             cur.execute(
                 f"""
                 INSERT INTO {self._config.chunks_table}
@@ -136,10 +145,36 @@ class PostgresMetadataStore:
                     chunk.section_path,
                     chunk.start_offset,
                     chunk.end_offset,
-                    chunk.metadata,
+                    Json(chunk.metadata),
                 ),
             )
             conn.commit()
+
+    def list_documents(self) -> list[Document]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT doc_id, source_type, title, origin, owner, created_at,
+                       updated_at, tags, access_scope
+                FROM {self._config.documents_table}
+                ORDER BY created_at DESC NULLS LAST, doc_id
+                """
+            )
+            rows = cur.fetchall()
+        return [
+            Document(
+                doc_id=row[0],
+                source_type=row[1],
+                title=row[2],
+                origin=row[3],
+                owner=row[4],
+                created_at=row[5],
+                updated_at=row[6],
+                tags=row[7] or [],
+                access_scope=row[8],
+            )
+            for row in rows
+        ]
 
     def list_chunks(self, doc_id: str) -> list[Chunk]:
         with self._connect() as conn, conn.cursor() as cur:

@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 
-from fastapi import FastAPI, HTTPException
+import json
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 
 from multi_rag.answering.grounded import GroundedAnswerer
 from multi_rag.answering.pipeline import AnsweringPipeline, AnsweringPipelineConfig
+from multi_rag.api.ingest_log import InMemoryIngestLog
 from multi_rag.api.models import (
     ChatRequest,
     ChatResponse,
     IngestRequest,
     IngestResponse,
+    IngestJobModel,
+    IngestStatusResponse,
+    DocumentListResponse,
+    DocumentModel,
     SearchRequest,
     SearchResponse,
     SearchResult,
@@ -40,9 +48,11 @@ class APISettings:
     database_url: str | None = None
     embedding_provider: str = "hash"
     embedding_dim: int = 8
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     top_k: int = 5
     context_max_chunks: int = 6
     neighbor_window: int = 1
+    allowed_origins: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -53,6 +63,7 @@ class AppDependencies:
     answerer: GroundedAnswerer
     pipeline: AnsweringPipeline
     tracer: Tracer
+    ingest_log: InMemoryIngestLog
 
 
 def _select_metadata_store(settings: APISettings) -> InMemoryMetadataStore | PostgresMetadataStore:
@@ -70,7 +81,7 @@ def _select_metadata_store(settings: APISettings) -> InMemoryMetadataStore | Pos
 
 def _select_embedder(settings: APISettings):
     if settings.embedding_provider == "sentence-transformer":
-        return SentenceTransformerProvider()
+        return SentenceTransformerProvider(model_name=settings.embedding_model)
     return HashEmbeddingProvider(dim=settings.embedding_dim)
 
 
@@ -111,6 +122,7 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
         answerer=answerer,
         pipeline=pipeline,
         tracer=active_tracer,
+        ingest_log=InMemoryIngestLog(),
     )
 
 
@@ -124,6 +136,14 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
         yield
 
     app = FastAPI(title="Multi-RAG API", lifespan=lifespan)
+    if settings.allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.allowed_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -137,18 +157,102 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
             text=payload.text,
             metadata=payload.metadata,
         )
-        document, chunks = normalize_and_chunk(raw)
-        dependencies.indexer.index_document(document, chunks)
-        dependencies.tracer.record_event(
-            "ingest.completed",
-            {"doc_id": document.doc_id, "chunk_count": len(
-                chunks), "source_type": source_type},
+        try:
+            document, chunks = normalize_and_chunk(raw)
+            dependencies.indexer.index_document(document, chunks)
+            dependencies.tracer.record_event(
+                "ingest.completed",
+                {
+                    "doc_id": document.doc_id,
+                    "chunk_count": len(chunks),
+                    "source_type": source_type,
+                },
+            )
+            dependencies.ingest_log.record_success(
+                source_type=source_type,
+                title=payload.title,
+                origin=payload.origin,
+            )
+            return IngestResponse(doc_id=document.doc_id, chunks_indexed=len(chunks))
+        except Exception as exc:
+            dependencies.ingest_log.record_failure(
+                source_type=source_type,
+                title=payload.title,
+                origin=payload.origin,
+                error=str(exc),
+            )
+            raise
+
+    def ingest_file(
+        source_type: str,
+        *,
+        title: str | None,
+        origin: str | None,
+        file: UploadFile,
+        metadata_json: str | None,
+    ) -> IngestResponse:
+        try:
+            metadata = json.loads(metadata_json) if metadata_json else {}
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="Invalid metadata JSON.") from exc
+
+        content_bytes = file.file.read()
+        try:
+            text = content_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content_bytes.decode("utf-8", errors="ignore")
+        text = text.replace("\x00", "")
+
+        file_name = file.filename or "upload"
+        resolved_title = title or file_name
+        resolved_origin = origin or file_name
+
+        raw = RawDocument(
+            source_type=source_type,
+            title=resolved_title,
+            origin=resolved_origin,
+            text=text,
+            metadata=metadata,
         )
-        return IngestResponse(doc_id=document.doc_id, chunks_indexed=len(chunks))
+        try:
+            document, chunks = normalize_and_chunk(raw)
+            dependencies.indexer.index_document(document, chunks)
+            dependencies.tracer.record_event(
+                "ingest.completed",
+                {
+                    "doc_id": document.doc_id,
+                    "chunk_count": len(chunks),
+                    "source_type": source_type,
+                    "file_name": file.filename,
+                },
+            )
+            dependencies.ingest_log.record_success(
+                source_type=source_type,
+                title=resolved_title,
+                origin=resolved_origin,
+            )
+            return IngestResponse(doc_id=document.doc_id, chunks_indexed=len(chunks))
+        except Exception as exc:
+            dependencies.ingest_log.record_failure(
+                source_type=source_type,
+                title=resolved_title,
+                origin=resolved_origin,
+                error=str(exc),
+            )
+            raise
 
     @app.post("/ingest/pdf", response_model=IngestResponse)
     def ingest_pdf(payload: IngestRequest) -> IngestResponse:
         return ingest("pdf", payload)
+
+    @app.post("/ingest/pdf/file", response_model=IngestResponse)
+    def ingest_pdf_file(
+        title: str | None = Form(None),
+        origin: str | None = Form(None),
+        file: UploadFile = File(...),
+        metadata: str | None = Form(None),
+    ) -> IngestResponse:
+        return ingest_file("pdf", title=title, origin=origin, file=file, metadata_json=metadata)
 
     @app.post("/ingest/web", response_model=IngestResponse)
     def ingest_web(payload: IngestRequest) -> IngestResponse:
@@ -161,6 +265,44 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
     @app.post("/ingest/code", response_model=IngestResponse)
     def ingest_code(payload: IngestRequest) -> IngestResponse:
         return ingest("code", payload)
+
+    @app.get("/ingest/status", response_model=IngestStatusResponse)
+    def ingest_status(limit: int = 50) -> IngestStatusResponse:
+        jobs = dependencies.ingest_log.list_jobs(limit=limit)
+        return IngestStatusResponse(
+            jobs=[
+                IngestJobModel(
+                    job_id=job.job_id,
+                    source_type=job.source_type,
+                    title=job.title,
+                    origin=job.origin,
+                    status=job.status,
+                    error=job.error,
+                    created_at=job.created_at.isoformat(),
+                )
+                for job in jobs
+            ]
+        )
+
+    @app.get("/documents", response_model=DocumentListResponse)
+    def list_documents() -> DocumentListResponse:
+        documents = dependencies.metadata_store.list_documents()
+        return DocumentListResponse(
+            documents=[
+                DocumentModel(
+                    doc_id=document.doc_id,
+                    source_type=document.source_type,
+                    title=document.title,
+                    origin=document.origin,
+                    owner=document.owner,
+                    created_at=document.created_at.isoformat() if document.created_at else None,
+                    updated_at=document.updated_at.isoformat() if document.updated_at else None,
+                    tags=document.tags,
+                    access_scope=document.access_scope,
+                )
+                for document in documents
+            ]
+        )
 
     @app.post("/search", response_model=SearchResponse)
     def search(payload: SearchRequest) -> SearchResponse:
@@ -204,12 +346,18 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
 
 
 def _settings_from_env() -> APISettings:
+    allowed_origins = os.getenv("ALLOWED_ORIGINS", "")
+    origins = [origin.strip() for origin in allowed_origins.split(",") if origin.strip()]
     return APISettings(
         metadata_backend=os.getenv("METADATA_BACKEND", "auto"),
         database_url=os.getenv("DATABASE_URL"),
         embedding_provider=os.getenv("EMBEDDING_PROVIDER", "hash"),
         embedding_dim=int(os.getenv("EMBEDDING_DIM", "8")),
+        embedding_model=os.getenv(
+            "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        ),
         top_k=int(os.getenv("TOP_K", "5")),
         context_max_chunks=int(os.getenv("CONTEXT_MAX_CHUNKS", "6")),
         neighbor_window=int(os.getenv("NEIGHBOR_WINDOW", "1")),
+        allowed_origins=origins,
     )
