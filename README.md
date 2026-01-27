@@ -14,7 +14,9 @@ code documentation.
 - Processing pipeline: normalization, cleaning, chunking, metadata merge.
 - Indexing components: embeddings provider, vector store, BM25 keyword index,
   metadata store, and an indexer service for wiring them together.
-- Unit tests for pipeline, BM25, vector store, and metadata store.
+- Answering: grounded answerer with citations, confidence, and refusal policy.
+- API: FastAPI app with ingest, search, and chat endpoints.
+- Unit tests for pipeline, indexing, retrieval, answering, and API.
 
 ## Usage Example
 
@@ -50,12 +52,29 @@ indexer.index_document(document, chunks)
 
 1. Copy `.env.example` to `.env`.
 2. Fill in required variables for local services.
+3. Install dependencies: `python -m pip install -e .`
+
+## Formatting (Pre-commit)
+
+1. `python -m pip install pre-commit`
+2. `pre-commit install`
+
+Prettier will run on staged files when you commit.
 
 ## Run Tests
 
 ```bash
 python -m pytest
 ```
+
+## Run API
+
+```bash
+PYTHONPATH=src uvicorn multi_rag.api.app:create_app --factory
+```
+
+If you want Postgres-backed metadata, set `DATABASE_URL` (and optionally
+`METADATA_BACKEND=postgres`) in your `.env`.
 
 ## Repo Map
 

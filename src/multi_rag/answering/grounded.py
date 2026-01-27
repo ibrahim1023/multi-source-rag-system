@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from multi_rag.indexing.metadata_store import InMemoryMetadataStore
+from multi_rag.indexing.metadata_store import InMemoryMetadataStore, PostgresMetadataStore
 from multi_rag.models import AnswerResponse, Claim, Citation, Chunk
 from multi_rag.retrieval.hybrid import RetrievalResult
 
@@ -22,7 +22,7 @@ class GroundedAnswerer:
     def __init__(
         self,
         *,
-        metadata_store: InMemoryMetadataStore,
+        metadata_store: InMemoryMetadataStore | PostgresMetadataStore,
         config: AnsweringConfig | None = None,
     ) -> None:
         self._metadata_store = metadata_store
@@ -171,7 +171,7 @@ def _clarifying_question(query_terms: list[str]) -> str:
 
 
 def _build_citation(
-    metadata_store: InMemoryMetadataStore,
+    metadata_store: InMemoryMetadataStore | PostgresMetadataStore,
     chunk: Chunk,
     sentence: str,
     config: AnsweringConfig,

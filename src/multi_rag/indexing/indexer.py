@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from multi_rag.indexing.bm25 import BM25Index
 from multi_rag.indexing.embeddings import EmbeddingProvider
 from multi_rag.indexing.vector_store import InMemoryVectorStore, VectorRecord
-from multi_rag.indexing.metadata_store import InMemoryMetadataStore
+from multi_rag.indexing.metadata_store import InMemoryMetadataStore, PostgresMetadataStore
 from multi_rag.models import Chunk, Document
 
 
@@ -16,7 +16,7 @@ class IndexerStores:
     embedder: EmbeddingProvider
     vector_store: InMemoryVectorStore
     keyword_index: BM25Index
-    metadata_store: InMemoryMetadataStore
+    metadata_store: InMemoryMetadataStore | PostgresMetadataStore
 
 
 class Indexer:

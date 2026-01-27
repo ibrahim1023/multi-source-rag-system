@@ -9,3 +9,6 @@ src/multi_rag/pipeline/__pycache__
 src/multi_rag/indexing/__pycache__/
 src/multi_rag/retrieval/__pycache__/
 src/multi_rag/answering/__pycache__/
+src/multi_rag/observability/__pycache__/
+src/multi_rag/api/__pycache__/
+src/multi_rag.egg-info/
