@@ -95,3 +95,45 @@ def test_answering_pipeline_wires_retrieval_and_answering() -> None:
 
     assert response.refused is False
     assert response.citations
+
+
+def test_pipeline_suppresses_follow_up_when_filtered() -> None:
+    embedder = HashEmbeddingProvider(dim=8)
+    vector_store = InMemoryVectorStore()
+    keyword_index = BM25Index()
+    metadata_store = InMemoryMetadataStore()
+
+    document = Document(
+        doc_id="doc1",
+        source_type="markdown",
+        title="Policy",
+        origin="/tmp/policy.md",
+    )
+    metadata_store.upsert_document(document)
+
+    chunk = Chunk(
+        chunk_id="doc1#0001",
+        doc_id="doc1",
+        chunk_text="Retention policy for logs is 30 days.",
+        chunk_index=1,
+        section_path="Retention",
+        metadata={"source_type": "markdown", "origin": "/tmp/policy.md"},
+    )
+    metadata_store.upsert_chunk(chunk)
+
+    vector = embedder.embed_texts([chunk.chunk_text])[0]
+    vector_store.upsert([VectorRecord(record_id=chunk.chunk_id, vector=vector, payload=chunk.metadata)])
+    keyword_index.add_documents([chunk.chunk_id], [chunk.chunk_text])
+
+    retriever = HybridRetriever(
+        embedder=embedder,
+        vector_store=vector_store,
+        keyword_index=keyword_index,
+        metadata_store=metadata_store,
+    )
+    answerer = GroundedAnswerer(metadata_store=metadata_store)
+    pipeline = AnsweringPipeline(retriever=retriever, answerer=answerer)
+
+    response = pipeline.answer("retention logs", metadata_filter={"origin": "/tmp/policy.md"})
+
+    assert response.follow_up_question is None

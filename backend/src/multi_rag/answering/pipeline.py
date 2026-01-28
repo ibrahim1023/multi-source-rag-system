@@ -15,6 +15,7 @@ class AnsweringPipelineConfig:
     top_k: int = 5
     context_max_chunks: int = 6
     neighbor_window: int = 1
+    focus_top_doc: bool = True
 
 
 class AnsweringPipeline:
@@ -49,8 +50,11 @@ class AnsweringPipeline:
             results,
             max_chunks=self._config.context_max_chunks,
             neighbor_window=self._config.neighbor_window,
+            focus_top_doc=self._config.focus_top_doc,
         )
         response = self._answerer.answer(query, results, context)
+        if metadata_filter and response.follow_up_question:
+            response.follow_up_question = None
         self._tracer.record_event(
             "answer.completed",
             {

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+import logging
 import os
 
 import json
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+import httpx
+from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
 from multi_rag.answering.grounded import GroundedAnswerer
@@ -40,6 +43,8 @@ from multi_rag.models import RawDocument
 from multi_rag.observability.tracing import NullTracer, Tracer
 from multi_rag.pipeline.normalize import normalize_and_chunk
 from multi_rag.retrieval.hybrid import HybridRetriever
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -126,6 +131,63 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
     )
 
 
+def _rehydrate_indexes(dependencies: AppDependencies) -> None:
+    documents = dependencies.metadata_store.list_documents()
+    if not documents:
+        return
+    indexed = 0
+    for document in documents:
+        chunks = dependencies.metadata_store.list_chunks(document.doc_id)
+        if not chunks:
+            continue
+        dependencies.indexer.index_document(document, chunks)
+        indexed += 1
+    if indexed:
+        logger.info("Rehydrated %s document(s) into in-memory indexes.", indexed)
+
+
+def _extract_pdf_text(content_bytes: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:  # pragma: no cover - runtime only
+        raise RuntimeError("pypdf is required for PDF ingestion.") from exc
+
+    from io import BytesIO
+
+    reader = PdfReader(BytesIO(content_bytes))
+    text = "\n".join((page.extract_text() or "") for page in reader.pages)
+    return text.replace("\x00", "")
+
+
+def _looks_like_url(text: str) -> bool:
+    candidate = text.strip()
+    if not candidate or " " in candidate:
+        return False
+    return candidate.startswith("http://") or candidate.startswith("https://")
+
+
+def _extract_html_text(html: str) -> str:
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError as exc:  # pragma: no cover - runtime only
+        raise RuntimeError("beautifulsoup4 is required for web ingestion.") from exc
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    text = " ".join(item.strip() for item in soup.stripped_strings)
+    return text.strip()
+
+
+def _fetch_url_text(url: str) -> str:
+    try:
+        response = httpx.get(url, timeout=15.0, follow_redirects=True)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=422, detail=f"Failed to fetch URL: {url}") from exc
+    return _extract_html_text(response.text)
+
+
 def create_app(settings: APISettings | None = None, dependencies: AppDependencies | None = None) -> FastAPI:
     settings = settings or _settings_from_env()
     dependencies = dependencies or build_dependencies(settings)
@@ -133,6 +195,7 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
     async def lifespan(_: FastAPI):
         if hasattr(dependencies.metadata_store, "create_tables"):
             dependencies.metadata_store.create_tables()
+        _rehydrate_indexes(dependencies)
         yield
 
     app = FastAPI(title="Multi-RAG API", lifespan=lifespan)
@@ -197,11 +260,19 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
             raise HTTPException(status_code=422, detail="Invalid metadata JSON.") from exc
 
         content_bytes = file.file.read()
-        try:
-            text = content_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            text = content_bytes.decode("utf-8", errors="ignore")
-        text = text.replace("\x00", "")
+        if source_type == "pdf":
+            text = _extract_pdf_text(content_bytes)
+            if not text.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="No text could be extracted from the PDF. Ensure it contains selectable text.",
+                )
+        else:
+            try:
+                text = content_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                text = content_bytes.decode("utf-8", errors="ignore")
+            text = text.replace("\x00", "")
 
         file_name = file.filename or "upload"
         resolved_title = title or file_name
@@ -256,6 +327,24 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
 
     @app.post("/ingest/web", response_model=IngestResponse)
     def ingest_web(payload: IngestRequest) -> IngestResponse:
+        text = payload.text
+        origin = payload.origin
+        if _looks_like_url(text):
+            url = text.strip()
+            text = _fetch_url_text(url)
+            if not text:
+                raise HTTPException(
+                    status_code=422,
+                    detail="No text could be extracted from the URL.",
+                )
+            if not origin:
+                origin = url
+            payload = IngestRequest(
+                title=payload.title,
+                origin=origin,
+                text=text,
+                metadata=payload.metadata,
+            )
         return ingest("web", payload)
 
     @app.post("/ingest/markdown", response_model=IngestResponse)
@@ -346,6 +435,7 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
 
 
 def _settings_from_env() -> APISettings:
+    load_dotenv()
     allowed_origins = os.getenv("ALLOWED_ORIGINS", "")
     origins = [origin.strip() for origin in allowed_origins.split(",") if origin.strip()]
     return APISettings(

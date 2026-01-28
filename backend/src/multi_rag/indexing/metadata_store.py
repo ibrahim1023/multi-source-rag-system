@@ -150,6 +150,57 @@ class PostgresMetadataStore:
             )
             conn.commit()
 
+    def get_document(self, doc_id: str) -> Document | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT doc_id, source_type, title, origin, owner, created_at,
+                       updated_at, tags, access_scope
+                FROM {self._config.documents_table}
+                WHERE doc_id = %s
+                """,
+                (doc_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return Document(
+            doc_id=row[0],
+            source_type=row[1],
+            title=row[2],
+            origin=row[3],
+            owner=row[4],
+            created_at=row[5],
+            updated_at=row[6],
+            tags=row[7] or [],
+            access_scope=row[8],
+        )
+
+    def get_chunk(self, chunk_id: str) -> Chunk | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT chunk_id, doc_id, chunk_text, chunk_index, section_path,
+                       start_offset, end_offset, metadata
+                FROM {self._config.chunks_table}
+                WHERE chunk_id = %s
+                """,
+                (chunk_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return Chunk(
+            chunk_id=row[0],
+            doc_id=row[1],
+            chunk_text=row[2],
+            chunk_index=row[3],
+            section_path=row[4],
+            start_offset=row[5],
+            end_offset=row[6],
+            metadata=row[7] or {},
+        )
+
     def list_documents(self) -> list[Document]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(

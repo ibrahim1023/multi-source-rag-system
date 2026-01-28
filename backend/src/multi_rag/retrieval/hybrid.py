@@ -78,14 +78,24 @@ class HybridRetriever:
         *,
         max_chunks: int = 6,
         neighbor_window: int = 1,
+        focus_top_doc: bool = False,
     ) -> list[Chunk]:
         context: list[Chunk] = []
         seen: set[str] = set()
+        focus_doc_id = None
+        if focus_top_doc:
+            for result in results:
+                candidate = self._metadata_store.get_chunk(result.chunk_id)
+                if candidate:
+                    focus_doc_id = candidate.doc_id
+                    break
         for result in results:
             if len(context) >= max_chunks:
                 break
             chunk = self._metadata_store.get_chunk(result.chunk_id)
             if not chunk:
+                continue
+            if focus_doc_id and chunk.doc_id != focus_doc_id:
                 continue
             for candidate in self._expand_section_window(chunk, neighbor_window):
                 if candidate.chunk_id in seen:

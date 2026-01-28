@@ -1,6 +1,6 @@
 .env
 
-skills/conventional-commit-drafter/
+skills/
 
 backend/tests/__pycache__/
 backend/src/multi_rag/__pycache__/
@@ -15,3 +15,6 @@ backend/src/multi_rag.egg-info/
 frontend/node_modules/
 frontend/.next/
 frontend/.env.local
+
+AGENTS.md
+context.md

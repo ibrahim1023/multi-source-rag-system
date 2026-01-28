@@ -16,7 +16,7 @@ code documentation.
   metadata store, and an indexer service for wiring them together.
 - Answering: grounded answerer with citations, confidence, and refusal policy.
 - API: FastAPI app with ingest, search, and chat endpoints.
-- UI: Next.js ingestion console with job history view.
+- UI: Next.js chat console with filters, citations panel, and ingestion console.
 - Unit tests for pipeline, indexing, retrieval, answering, and API.
 
 ## Usage Example
@@ -57,6 +57,15 @@ Backend:
 2. Fill in required variables for local services.
 3. Install dependencies: `python -m pip install -e backend`
 
+Dependency tracking:
+
+- `backend/requirements.txt` mirrors `backend/pyproject.toml` runtime deps.
+- Update both files whenever a new package is added.
+
+Environment loading:
+
+- The API auto-loads `backend/.env` on startup using `python-dotenv`.
+
 If you want higher-quality embeddings, set:
 
 ```
@@ -86,12 +95,23 @@ PYTHONPATH=src uvicorn multi_rag.api.app:create_app --factory
 If you want Postgres-backed metadata, set `DATABASE_URL` (and optionally
 `METADATA_BACKEND=postgres`) in your `backend/.env`.
 
+When using Postgres, the API will rehydrate in-memory indexes from stored
+chunks on startup so retrieval works after a restart.
+
+Shorter option:
+
+```bash
+./backend/scripts/run_api.sh
+```
+
 ## Run Frontend
 
 ```bash
 cd frontend
 npm run dev
 ```
+
+Open `http://localhost:3000` for chat and `http://localhost:3000/ingest` for ingestion.
 
 ## Uploading Files
 
@@ -102,7 +122,16 @@ Use the file upload endpoint for PDFs:
 It expects `multipart/form-data` with `title`, `origin`, optional `metadata`
 JSON string, and `file`.
 
+PDF upload extracts text with `pypdf`. Image-only PDFs will return a 422 error
+because no selectable text can be extracted.
+
+## Web Ingestion
+
+The web ingest endpoint accepts either raw page text or a URL. If a URL is
+provided, the backend fetches the page and extracts readable text before
+indexing.
+
 ## Repo Map
 
 - `backend/`: Python implementation.
-- `frontend/`: Next.js ingestion console.
+- `frontend/`: Next.js chat console + ingestion console.
