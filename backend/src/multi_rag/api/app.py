@@ -41,7 +41,7 @@ from multi_rag.indexing.metadata_store import (
 )
 from multi_rag.indexing.vector_store import InMemoryVectorStore
 from multi_rag.models import RawDocument
-from multi_rag.observability.tracing import NullTracer, Tracer
+from multi_rag.observability.tracing import Tracer, build_tracer
 from multi_rag.pipeline.normalize import normalize_and_chunk
 from multi_rag.pipeline.quality import analyze_text_quality, is_low_quality_ingest
 from multi_rag.retrieval.hybrid import HybridRetriever
@@ -74,6 +74,9 @@ class APISettings:
     freshness_half_life_days: float = 30.0
     freshness_source_weights: dict[str, float] = field(default_factory=dict)
     citation_validation_enabled: bool = True
+    observability_mode: str = "null"
+    observability_service_name: str = "multi-rag"
+    observability_static_fields: dict = field(default_factory=dict)
     reindex_enabled: bool = False
     reindex_interval_seconds: int = 300
     reindex_max_documents: int = 50
@@ -118,7 +121,11 @@ def _select_embedder(settings: APISettings):
 
 
 def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -> AppDependencies:
-    active_tracer = tracer or NullTracer()
+    active_tracer = tracer or build_tracer(
+        settings.observability_mode,
+        service_name=settings.observability_service_name,
+        static_fields=settings.observability_static_fields,
+    )
     metadata_store = _select_metadata_store(settings)
     embedder = _select_embedder(settings)
     vector_store = InMemoryVectorStore()
@@ -607,6 +614,9 @@ def _settings_from_env() -> APISettings:
         freshness_half_life_days=float(os.getenv("FRESHNESS_HALF_LIFE_DAYS", "30")),
         freshness_source_weights=_env_json("FRESHNESS_SOURCE_WEIGHTS"),
         citation_validation_enabled=_env_flag("CITATION_VALIDATION_ENABLED", True),
+        observability_mode=os.getenv("OBSERVABILITY_MODE", "null"),
+        observability_service_name=os.getenv("OBSERVABILITY_SERVICE_NAME", "multi-rag"),
+        observability_static_fields=_env_json("OBSERVABILITY_STATIC_FIELDS"),
         reindex_enabled=_env_flag("REINDEX_ENABLED", False),
         reindex_interval_seconds=int(os.getenv("REINDEX_INTERVAL_SECONDS", "300")),
         reindex_max_documents=int(os.getenv("REINDEX_MAX_DOCUMENTS", "50")),

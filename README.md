@@ -90,6 +90,15 @@ cd backend
 python -m pytest
 ```
 
+## Offline Evaluation
+
+```bash
+python backend/scripts/run_eval.py --gold eval/gold_set.jsonl --config eval/config.json
+```
+
+Populate `eval/gold_set.jsonl` with 30-80 questions and expected sources before
+demo readiness.
+
 ## Run API
 
 ```bash
@@ -108,6 +117,14 @@ Shorter option:
 ```bash
 ./backend/scripts/run_api.sh
 ```
+
+## Ingest Demo Sources
+
+```bash
+./backend/scripts/ingest_demo.sh
+```
+
+This posts the files in `demo_sources/` to the running API for quick eval runs.
 
 ## Run Frontend
 
@@ -154,6 +171,11 @@ Freshness weighting, citation validation, and background reindex:
 - Set `REINDEX_ENABLED=true` to periodically reindex local files when changed.
 - Configure interval and scope with `REINDEX_INTERVAL_SECONDS` and
   `REINDEX_MAX_DOCUMENTS`.
+
+Observability:
+
+- Set `OBSERVABILITY_MODE=structured` to emit JSON logs per ingest/search/chat.
+- Use `OBSERVABILITY_SERVICE_NAME` and `OBSERVABILITY_STATIC_FIELDS` to tag logs.
 
 ## Ingestion Scope
 
