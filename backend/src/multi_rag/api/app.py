@@ -41,7 +41,7 @@ from multi_rag.indexing.vector_store import InMemoryVectorStore
 from multi_rag.models import RawDocument
 from multi_rag.observability.tracing import NullTracer, Tracer
 from multi_rag.pipeline.normalize import normalize_and_chunk
-from multi_rag.pipeline.quality import is_low_quality_ingest
+from multi_rag.pipeline.quality import analyze_text_quality, is_low_quality_ingest
 from multi_rag.retrieval.hybrid import HybridRetriever
 
 logger = logging.getLogger("uvicorn.error")
@@ -59,6 +59,14 @@ class APISettings:
     neighbor_window: int = 1
     allowed_origins: list[str] = field(default_factory=list)
     bm25_path: str | None = None
+    ocr_enabled: bool = False
+    ocr_min_word_count: int = 10
+    ocr_lang: str = "eng"
+    reranker_enabled: bool = False
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_top_k: int = 8
+    query_expansion_enabled: bool = True
+    query_expansion_max_terms: int = 24
 
 
 @dataclass
@@ -72,6 +80,9 @@ class AppDependencies:
     ingest_log: InMemoryIngestLog
     bm25_loaded: bool = False
     bm25_path: str | None = None
+    ocr_enabled: bool = False
+    ocr_min_word_count: int = 10
+    ocr_lang: str = "eng"
 
 
 def _select_metadata_store(settings: APISettings) -> InMemoryMetadataStore | PostgresMetadataStore:
@@ -110,11 +121,25 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
         metadata_store=metadata_store,
     )
     indexer = Indexer(stores)
+    reranker = None
+    if settings.reranker_enabled:
+        from multi_rag.retrieval.reranker import CrossEncoderReranker
+
+        reranker = CrossEncoderReranker(model_name=settings.reranker_model)
+    from multi_rag.retrieval.query_expansion import QueryExpansionConfig
+
+    query_config = QueryExpansionConfig(
+        enabled=settings.query_expansion_enabled,
+        max_total_terms=settings.query_expansion_max_terms,
+    )
     retriever = HybridRetriever(
         embedder=embedder,
         vector_store=vector_store,
         keyword_index=keyword_index,
         metadata_store=metadata_store,
+        query_config=query_config,
+        reranker=reranker,
+        rerank_top_k=settings.reranker_top_k,
     )
     answerer = GroundedAnswerer(metadata_store=metadata_store)
     pipeline = AnsweringPipeline(
@@ -137,6 +162,9 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
         ingest_log=InMemoryIngestLog(),
         bm25_loaded=bm25_loaded,
         bm25_path=settings.bm25_path,
+        ocr_enabled=settings.ocr_enabled,
+        ocr_min_word_count=settings.ocr_min_word_count,
+        ocr_lang=settings.ocr_lang,
     )
 
 
@@ -159,7 +187,34 @@ def _rehydrate_indexes(dependencies: AppDependencies) -> None:
         logger.info("Rehydrated %s document(s) into in-memory indexes.", indexed)
 
 
-def _extract_pdf_text(content_bytes: bytes) -> str:
+@dataclass(frozen=True)
+class PDFExtractionResult:
+    text: str
+    used_ocr: bool
+
+
+def _run_pdf_ocr(content_bytes: bytes, *, lang: str) -> str:
+    try:
+        from pdf2image import convert_from_bytes
+    except ImportError as exc:  # pragma: no cover - runtime only
+        raise RuntimeError("pdf2image is required for OCR fallback.") from exc
+    try:
+        import pytesseract
+    except ImportError as exc:  # pragma: no cover - runtime only
+        raise RuntimeError("pytesseract is required for OCR fallback.") from exc
+
+    images = convert_from_bytes(content_bytes)
+    text = "\n".join(pytesseract.image_to_string(image, lang=lang) for image in images)
+    return text.replace("\x00", "")
+
+
+def _extract_pdf_text(
+    content_bytes: bytes,
+    *,
+    ocr_enabled: bool,
+    ocr_min_word_count: int,
+    ocr_lang: str,
+) -> PDFExtractionResult:
     try:
         from pypdf import PdfReader
     except ImportError as exc:  # pragma: no cover - runtime only
@@ -169,9 +224,34 @@ def _extract_pdf_text(content_bytes: bytes) -> str:
 
     reader = PdfReader(BytesIO(content_bytes))
     text = "\n".join((page.extract_text() or "") for page in reader.pages)
-    return text.replace("\x00", "")
+    text = text.replace("\x00", "")
+    quality = analyze_text_quality(text)
+    if quality.word_count >= ocr_min_word_count:
+        return PDFExtractionResult(text=text, used_ocr=False)
+    if not ocr_enabled:
+        return PDFExtractionResult(text=text, used_ocr=False)
+    try:
+        ocr_text = _run_pdf_ocr(content_bytes, lang=ocr_lang)
+    except RuntimeError as exc:
+        logger.warning("OCR fallback unavailable: %s", exc)
+        return PDFExtractionResult(text=text, used_ocr=False)
+    if ocr_text.strip():
+        return PDFExtractionResult(text=ocr_text, used_ocr=True)
+    return PDFExtractionResult(text=text, used_ocr=False)
 
 
+def _apply_ocr_metadata(metadata: dict, *, used_ocr: bool) -> dict:
+    if not used_ocr:
+        return metadata
+    metadata.setdefault("extraction_method", "ocr")
+    metadata["ocr_used"] = True
+    tags = metadata.get("tags")
+    if tags is None:
+        metadata["tags"] = ["ocr"]
+    elif isinstance(tags, list):
+        if "ocr" not in tags:
+            tags.append("ocr")
+    return metadata
 
 
 def _validate_ingest_text(text: str, *, source_type: str) -> None:
@@ -261,11 +341,21 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
 
         content_bytes = file.file.read()
         if source_type == "pdf":
-            text = _extract_pdf_text(content_bytes)
+            extracted = _extract_pdf_text(
+                content_bytes,
+                ocr_enabled=dependencies.ocr_enabled,
+                ocr_min_word_count=dependencies.ocr_min_word_count,
+                ocr_lang=dependencies.ocr_lang,
+            )
+            text = extracted.text
+            metadata = _apply_ocr_metadata(metadata, used_ocr=extracted.used_ocr)
             if not text.strip():
                 raise HTTPException(
                     status_code=422,
-                    detail="No text could be extracted from the PDF. Ensure it contains selectable text.",
+                    detail=(
+                        "No text could be extracted from the PDF. "
+                        "Ensure it contains selectable text or enable OCR."
+                    ),
                 )
         else:
             try:
@@ -422,6 +512,11 @@ def _settings_from_env() -> APISettings:
     load_dotenv()
     allowed_origins = os.getenv("ALLOWED_ORIGINS", "")
     origins = [origin.strip() for origin in allowed_origins.split(",") if origin.strip()]
+    def _env_flag(name: str, default: bool = False) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
     return APISettings(
         metadata_backend=os.getenv("METADATA_BACKEND", "auto"),
         database_url=os.getenv("DATABASE_URL"),
@@ -435,4 +530,14 @@ def _settings_from_env() -> APISettings:
         neighbor_window=int(os.getenv("NEIGHBOR_WINDOW", "1")),
         allowed_origins=origins,
         bm25_path=os.getenv("BM25_PATH"),
+        ocr_enabled=_env_flag("OCR_ENABLED", False),
+        ocr_min_word_count=int(os.getenv("OCR_MIN_WORD_COUNT", "10")),
+        ocr_lang=os.getenv("OCR_LANG", "eng"),
+        reranker_enabled=_env_flag("RERANKER_ENABLED", False),
+        reranker_model=os.getenv(
+            "RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+        ),
+        reranker_top_k=int(os.getenv("RERANKER_TOP_K", "8")),
+        query_expansion_enabled=_env_flag("QUERY_EXPANSION_ENABLED", True),
+        query_expansion_max_terms=int(os.getenv("QUERY_EXPANSION_MAX_TERMS", "24")),
     )

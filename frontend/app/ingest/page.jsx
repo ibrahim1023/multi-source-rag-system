@@ -40,6 +40,8 @@ const SOURCE_CONFIG = {
 export default function IngestionPage() {
   const apiBase =
     process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+  const ocrEnabled =
+    (process.env.NEXT_PUBLIC_OCR_ENABLED || "").toLowerCase() === "true";
   const [sourceType, setSourceType] = useState("markdown");
   const [title, setTitle] = useState(SOURCE_CONFIG.markdown.title);
   const [origin, setOrigin] = useState(SOURCE_CONFIG.markdown.origin);
@@ -142,7 +144,10 @@ export default function IngestionPage() {
   return (
     <main className="page">
       <section className="hero">
-        <span className="badge">Ingestion Console</span>
+        <div className="pill-group">
+          <span className="badge">Ingestion Console</span>
+          {ocrEnabled ? <span className="badge">OCR fallback enabled</span> : null}
+        </div>
         <h1>Ingest sources in three clear steps.</h1>
         <p>
           Choose a source type, supply the content, and confirm the details.

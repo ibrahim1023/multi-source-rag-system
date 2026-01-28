@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from multi_rag.indexing.bm25 import BM25Index
 from multi_rag.indexing.embeddings import EmbeddingProvider
 from multi_rag.indexing.metadata_store import InMemoryMetadataStore, PostgresMetadataStore
-from multi_rag.indexing.vector_store import InMemoryVectorStore, VectorRecord
+from multi_rag.indexing.vector_store import InMemoryVectorStore
 from multi_rag.models import Chunk
+from multi_rag.retrieval.query_expansion import QueryExpansionConfig, expand_query
+from multi_rag.retrieval.reranker import Reranker
 
 
 @dataclass
@@ -28,6 +30,9 @@ class HybridRetriever:
         metadata_store: InMemoryMetadataStore | PostgresMetadataStore,
         vector_weight: float = 0.7,
         keyword_weight: float = 0.3,
+        query_config: QueryExpansionConfig | None = None,
+        reranker: Reranker | None = None,
+        rerank_top_k: int = 8,
     ) -> None:
         self._embedder = embedder
         self._vector_store = vector_store
@@ -35,6 +40,9 @@ class HybridRetriever:
         self._metadata_store = metadata_store
         self._vector_weight = vector_weight
         self._keyword_weight = keyword_weight
+        self._query_config = query_config or QueryExpansionConfig()
+        self._reranker = reranker
+        self._rerank_top_k = rerank_top_k
 
     def retrieve(
         self,
@@ -43,11 +51,18 @@ class HybridRetriever:
         top_k: int = 5,
         metadata_filter: dict | None = None,
     ) -> list[RetrievalResult]:
+        expanded = expand_query(query, self._query_config)
+        vector_query = query
+        keyword_query = query
+        if self._query_config.use_expanded_for_embeddings:
+            vector_query = expanded.expanded_text
+        if self._query_config.use_expanded_for_bm25:
+            keyword_query = expanded.expanded_text
         vector_results = self._vector_store.search_with_scores(
-            self._embedder.embed_texts([query])[0],
+            self._embedder.embed_texts([vector_query])[0],
             limit=top_k * 2,
         )
-        keyword_results = self._keyword_index.search(query, top_k=top_k * 2)
+        keyword_results = self._keyword_index.search(keyword_query, top_k=top_k * 2)
 
         vector_scores = {record.record_id: score for record,
                          score in vector_results}
@@ -70,6 +85,7 @@ class HybridRetriever:
                           score=score, payload=chunk.metadata))
 
         scored.sort(key=lambda item: item.score, reverse=True)
+        scored = self._apply_reranker(query, scored)
         return scored[:top_k]
 
     def assemble_context(
@@ -128,6 +144,39 @@ class HybridRetriever:
         if chunk.section_path:
             window = [item for item in window if item.section_path == chunk.section_path]
         return window
+
+    def _apply_reranker(
+        self, query: str, scored: list[RetrievalResult]
+    ) -> list[RetrievalResult]:
+        if not scored or not self._reranker:
+            return scored
+        limit = min(self._rerank_top_k, len(scored))
+        candidates = [
+            self._metadata_store.get_chunk(result.chunk_id)
+            for result in scored[:limit]
+        ]
+        chunks = [chunk for chunk in candidates if chunk]
+        if not chunks:
+            return scored
+        reranked = self._reranker.rerank(query, chunks)
+        if not reranked:
+            return scored
+        original_map = {result.chunk_id: result for result in scored}
+        reranked_results: list[RetrievalResult] = []
+        used: set[str] = set()
+        for chunk_id, score in reranked:
+            original = original_map.get(chunk_id)
+            if not original:
+                continue
+            reranked_results.append(
+                RetrievalResult(chunk_id=chunk_id, score=score, payload=original.payload)
+            )
+            used.add(chunk_id)
+        for result in scored:
+            if result.chunk_id in used:
+                continue
+            reranked_results.append(result)
+        return reranked_results
 
 
 def _matches_filter(metadata: dict, filters: dict) -> bool:

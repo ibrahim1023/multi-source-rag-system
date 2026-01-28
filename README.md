@@ -128,7 +128,22 @@ It expects `multipart/form-data` with `title`, `origin`, optional `metadata`
 JSON string, and `file`.
 
 PDF upload extracts text with `pypdf`. Image-only PDFs will return a 422 error
-because no selectable text can be extracted.
+unless OCR fallback is enabled.
+
+Optional OCR fallback:
+
+- Set `OCR_ENABLED=true` to attempt OCR when extracted text is low-signal.
+- Requires `pytesseract`, `pdf2image`, and a system Tesseract + Poppler install.
+- OCR-sourced ingests are tagged with `ocr` and `extraction_method=ocr` metadata.
+- Set `NEXT_PUBLIC_OCR_ENABLED=true` in the frontend env to show a UI badge.
+
+Optional reranking and query expansion:
+
+- Set `RERANKER_ENABLED=true` to rerank top candidates with a cross-encoder.
+- Set `RERANKER_MODEL` to a sentence-transformers cross-encoder model.
+- Requires `sentence-transformers` to be installed.
+- Query expansion + stopword handling are on by default; disable with
+  `QUERY_EXPANSION_ENABLED=false`.
 
 ## Ingestion Scope
 

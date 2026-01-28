@@ -1,8 +1,5 @@
 .env
 
-skills/
-
-backend/tests/__pycache__/
 backend/src/multi_rag/__pycache__/
 backend/src/multi_rag/pipeline/__pycache__/
 backend/src/multi_rag/indexing/__pycache__/
@@ -11,11 +8,13 @@ backend/src/multi_rag/answering/__pycache__/
 backend/src/multi_rag/observability/__pycache__/
 backend/src/multi_rag/api/__pycache__/
 backend/src/multi_rag.egg-info/
+backend/tests/__pycache__/
 backend/.bm25.json
 
 frontend/node_modules/
 frontend/.next/
 frontend/.env.local
 
+skills/
 AGENTS.md
 context.md
