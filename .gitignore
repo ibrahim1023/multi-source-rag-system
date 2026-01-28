@@ -1,4 +1,5 @@
-.env
+backend/.env
+frontend/.env
 
 backend/src/multi_rag/__pycache__/
 backend/src/multi_rag/pipeline/__pycache__/
@@ -12,6 +13,7 @@ backend/src/multi_rag/eval/__pycache__/offline.cpython-312.pyc
 backend/tests/__pycache__/
 backend/src/multi_rag.egg-info/
 backend/.bm25.json
+.bm25.json
 
 frontend/node_modules/
 frontend/.next/

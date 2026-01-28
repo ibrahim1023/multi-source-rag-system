@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from multi_rag.answering.grounded import GroundedAnswerer
+from multi_rag.answering.base import Answerer
 from multi_rag.models import AnswerResponse
 from multi_rag.observability.tracing import NullTracer, Tracer
 from multi_rag.retrieval.hybrid import HybridRetriever
@@ -23,7 +23,7 @@ class AnsweringPipeline:
         self,
         *,
         retriever: HybridRetriever,
-        answerer: GroundedAnswerer,
+        answerer: Answerer,
         config: AnsweringPipelineConfig | None = None,
         tracer: Tracer | None = None,
     ) -> None:

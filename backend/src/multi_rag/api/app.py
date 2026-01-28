@@ -56,6 +56,8 @@ class APISettings:
     embedding_provider: str = "hash"
     embedding_dim: int = 8
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    llm_model: str | None = None
+    google_api_key: str | None = None
     top_k: int = 5
     context_max_chunks: int = 6
     neighbor_window: int = 1
@@ -165,10 +167,25 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
         freshness_half_life_days=settings.freshness_half_life_days,
         freshness_source_weights=settings.freshness_source_weights,
     )
-    answerer = GroundedAnswerer(
+    grounded_answerer = GroundedAnswerer(
         metadata_store=metadata_store,
         config=AnsweringConfig(validate_citations=settings.citation_validation_enabled),
     )
+    answerer = grounded_answerer
+    if settings.llm_model:
+        if not settings.google_api_key:
+            logger.warning(
+                "LLM_MODEL is set but GOOGLE_API_KEY/GEMINI_API_KEY is missing; "
+                "using grounded answering."
+            )
+        else:
+            from multi_rag.answering.llm import GeminiClient, LLMAnswerer, LLMAnsweringConfig
+
+            answerer = LLMAnswerer(
+                client=GeminiClient(api_key=settings.google_api_key, model_name=settings.llm_model),
+                grounded=grounded_answerer,
+                config=LLMAnsweringConfig(model_name=settings.llm_model),
+            )
     pipeline = AnsweringPipeline(
         retriever=retriever,
         answerer=answerer,
@@ -594,6 +611,8 @@ def _settings_from_env() -> APISettings:
         embedding_model=os.getenv(
             "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
         ),
+        llm_model=os.getenv("LLM_MODEL") or None,
+        google_api_key=os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or None,
         top_k=int(os.getenv("TOP_K", "5")),
         context_max_chunks=int(os.getenv("CONTEXT_MAX_CHUNKS", "6")),
         neighbor_window=int(os.getenv("NEIGHBOR_WINDOW", "1")),
