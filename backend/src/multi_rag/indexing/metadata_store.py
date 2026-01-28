@@ -31,6 +31,11 @@ class InMemoryMetadataStore:
         chunks = [chunk for chunk in self._chunks.values() if chunk.doc_id == doc_id]
         return sorted(chunks, key=lambda item: item.chunk_index)
 
+    def delete_chunks(self, doc_id: str) -> None:
+        to_delete = [chunk_id for chunk_id, chunk in self._chunks.items() if chunk.doc_id == doc_id]
+        for chunk_id in to_delete:
+            del self._chunks[chunk_id]
+
 @dataclass
 class PostgresConfig:
     dsn: str
@@ -253,3 +258,11 @@ class PostgresMetadataStore:
             )
             for row in rows
         ]
+
+    def delete_chunks(self, doc_id: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {self._config.chunks_table} WHERE doc_id = %s",
+                (doc_id,),
+            )
+            conn.commit()

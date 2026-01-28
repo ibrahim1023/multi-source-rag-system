@@ -167,3 +167,53 @@ def test_reranker_overrides_order() -> None:
     )
     results = retriever.retrieve("chunk text", top_k=2)
     assert results[0].chunk_id == "doc1#0002"
+
+
+def test_freshness_weighting_boosts_recent_sources() -> None:
+    embedder = HashEmbeddingProvider(dim=8)
+    vector_store = InMemoryVectorStore()
+    keyword_index = BM25Index()
+    metadata_store = InMemoryMetadataStore()
+
+    document = Document(
+        doc_id="doc1",
+        source_type="markdown",
+        title="Doc",
+        origin="/tmp/doc.md",
+        updated_at=None,
+    )
+    metadata_store.upsert_document(document)
+
+    chunks = [
+        Chunk(
+            chunk_id="doc1#0001",
+            doc_id="doc1",
+            chunk_text="Retention policy for logs.",
+            chunk_index=1,
+            metadata={"source_type": "markdown", "updated_at": "2000-01-01T00:00:00"},
+        ),
+        Chunk(
+            chunk_id="doc1#0002",
+            doc_id="doc1",
+            chunk_text="Retention policy for logs.",
+            chunk_index=2,
+            metadata={"source_type": "markdown", "updated_at": "2025-01-01T00:00:00"},
+        ),
+    ]
+    for chunk in chunks:
+        metadata_store.upsert_chunk(chunk)
+        vector = embedder.embed_texts([chunk.chunk_text])[0]
+        vector_store.upsert([VectorRecord(record_id=chunk.chunk_id, vector=vector, payload=chunk.metadata)])
+        keyword_index.add_documents([chunk.chunk_id], [chunk.chunk_text])
+
+    retriever = HybridRetriever(
+        embedder=embedder,
+        vector_store=vector_store,
+        keyword_index=keyword_index,
+        metadata_store=metadata_store,
+        freshness_enabled=True,
+        freshness_weight=1.0,
+        freshness_half_life_days=3650.0,
+    )
+    results = retriever.retrieve("retention policy", top_k=2)
+    assert results[0].chunk_id == "doc1#0002"

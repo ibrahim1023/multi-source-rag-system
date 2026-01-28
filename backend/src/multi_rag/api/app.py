@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import logging
 import os
 
@@ -13,9 +14,10 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
-from multi_rag.answering.grounded import GroundedAnswerer
+from multi_rag.answering.grounded import AnsweringConfig, GroundedAnswerer
 from multi_rag.answering.pipeline import AnsweringPipeline, AnsweringPipelineConfig
 from multi_rag.api.ingest_log import InMemoryIngestLog
+from multi_rag.api.reindexer import BackgroundReindexer, ReindexSettings
 from multi_rag.api.models import (
     ChatRequest,
     ChatResponse,
@@ -67,6 +69,14 @@ class APISettings:
     reranker_top_k: int = 8
     query_expansion_enabled: bool = True
     query_expansion_max_terms: int = 24
+    freshness_enabled: bool = False
+    freshness_weight: float = 0.15
+    freshness_half_life_days: float = 30.0
+    freshness_source_weights: dict[str, float] = field(default_factory=dict)
+    citation_validation_enabled: bool = True
+    reindex_enabled: bool = False
+    reindex_interval_seconds: int = 300
+    reindex_max_documents: int = 50
 
 
 @dataclass
@@ -83,6 +93,9 @@ class AppDependencies:
     ocr_enabled: bool = False
     ocr_min_word_count: int = 10
     ocr_lang: str = "eng"
+    reindex_enabled: bool = False
+    reindex_interval_seconds: int = 300
+    reindex_max_documents: int = 50
 
 
 def _select_metadata_store(settings: APISettings) -> InMemoryMetadataStore | PostgresMetadataStore:
@@ -140,8 +153,15 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
         query_config=query_config,
         reranker=reranker,
         rerank_top_k=settings.reranker_top_k,
+        freshness_enabled=settings.freshness_enabled,
+        freshness_weight=settings.freshness_weight,
+        freshness_half_life_days=settings.freshness_half_life_days,
+        freshness_source_weights=settings.freshness_source_weights,
     )
-    answerer = GroundedAnswerer(metadata_store=metadata_store)
+    answerer = GroundedAnswerer(
+        metadata_store=metadata_store,
+        config=AnsweringConfig(validate_citations=settings.citation_validation_enabled),
+    )
     pipeline = AnsweringPipeline(
         retriever=retriever,
         answerer=answerer,
@@ -165,6 +185,9 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
         ocr_enabled=settings.ocr_enabled,
         ocr_min_word_count=settings.ocr_min_word_count,
         ocr_lang=settings.ocr_lang,
+        reindex_enabled=settings.reindex_enabled,
+        reindex_interval_seconds=settings.reindex_interval_seconds,
+        reindex_max_documents=settings.reindex_max_documents,
     )
 
 
@@ -262,15 +285,43 @@ def _validate_ingest_text(text: str, *, source_type: str) -> None:
         )
 
 
+def _ensure_ingest_timestamps(metadata: dict) -> dict:
+    updated = dict(metadata)
+    now = datetime.now(timezone.utc).isoformat()
+    updated.setdefault("created_at", now)
+    updated.setdefault("updated_at", now)
+    return updated
+
+
 def create_app(settings: APISettings | None = None, dependencies: AppDependencies | None = None) -> FastAPI:
     settings = settings or _settings_from_env()
     dependencies = dependencies or build_dependencies(settings)
+    reindexer: BackgroundReindexer | None = None
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         if hasattr(dependencies.metadata_store, "create_tables"):
             dependencies.metadata_store.create_tables()
         _rehydrate_indexes(dependencies)
+        nonlocal reindexer
+        if settings.reindex_enabled:
+            reindexer = BackgroundReindexer(
+                metadata_store=dependencies.metadata_store,
+                indexer=dependencies.indexer,
+                settings=ReindexSettings(
+                    enabled=True,
+                    interval_seconds=settings.reindex_interval_seconds,
+                    max_documents=settings.reindex_max_documents,
+                ),
+                logger=logger,
+                pdf_extractor=_extract_pdf_text,
+                ocr_enabled=dependencies.ocr_enabled,
+                ocr_min_word_count=dependencies.ocr_min_word_count,
+                ocr_lang=dependencies.ocr_lang,
+            )
+            reindexer.start()
         yield
+        if reindexer:
+            reindexer.stop()
 
     app = FastAPI(title="Multi-RAG API", lifespan=lifespan)
     if settings.allowed_origins:
@@ -287,12 +338,13 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
         return {"status": "ok"}
 
     def ingest(source_type: str, payload: IngestRequest) -> IngestResponse:
+        metadata = _ensure_ingest_timestamps(payload.metadata)
         raw = RawDocument(
             source_type=source_type,
             title=payload.title,
             origin=payload.origin,
             text=payload.text,
-            metadata=payload.metadata,
+            metadata=metadata,
         )
         try:
             _validate_ingest_text(payload.text, source_type=source_type)
@@ -338,6 +390,7 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
             metadata = json.loads(metadata_json) if metadata_json else {}
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=422, detail="Invalid metadata JSON.") from exc
+        metadata = _ensure_ingest_timestamps(metadata)
 
         content_bytes = file.file.read()
         if source_type == "pdf":
@@ -517,6 +570,15 @@ def _settings_from_env() -> APISettings:
         if value is None:
             return default
         return value.strip().lower() in {"1", "true", "yes", "on"}
+    def _env_json(name: str) -> dict:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return {}
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
     return APISettings(
         metadata_backend=os.getenv("METADATA_BACKEND", "auto"),
         database_url=os.getenv("DATABASE_URL"),
@@ -540,4 +602,12 @@ def _settings_from_env() -> APISettings:
         reranker_top_k=int(os.getenv("RERANKER_TOP_K", "8")),
         query_expansion_enabled=_env_flag("QUERY_EXPANSION_ENABLED", True),
         query_expansion_max_terms=int(os.getenv("QUERY_EXPANSION_MAX_TERMS", "24")),
+        freshness_enabled=_env_flag("FRESHNESS_ENABLED", False),
+        freshness_weight=float(os.getenv("FRESHNESS_WEIGHT", "0.15")),
+        freshness_half_life_days=float(os.getenv("FRESHNESS_HALF_LIFE_DAYS", "30")),
+        freshness_source_weights=_env_json("FRESHNESS_SOURCE_WEIGHTS"),
+        citation_validation_enabled=_env_flag("CITATION_VALIDATION_ENABLED", True),
+        reindex_enabled=_env_flag("REINDEX_ENABLED", False),
+        reindex_interval_seconds=int(os.getenv("REINDEX_INTERVAL_SECONDS", "300")),
+        reindex_max_documents=int(os.getenv("REINDEX_MAX_DOCUMENTS", "50")),
     )

@@ -52,6 +52,27 @@ class BM25Index:
                                 for doc in self._docs) / max(len(self._docs), 1)
         self.persist()
 
+    def delete_documents(self, doc_ids: list[str]) -> None:
+        if not doc_ids:
+            return
+        remove_ids = set(doc_ids)
+        remaining_docs: list[list[str]] = []
+        remaining_ids: list[str] = []
+        for doc_id, doc_tokens in zip(self._doc_ids, self._docs):
+            if doc_id in remove_ids:
+                continue
+            remaining_ids.append(doc_id)
+            remaining_docs.append(doc_tokens)
+        self._doc_ids = remaining_ids
+        self._docs = remaining_docs
+        self._doc_freq = {}
+        for doc_tokens in self._docs:
+            for token in set(doc_tokens):
+                self._doc_freq[token] = self._doc_freq.get(token, 0) + 1
+        self._avg_doc_len = sum(len(doc)
+                                for doc in self._docs) / max(len(self._docs), 1)
+        self.persist()
+
     def search(self, query: str, top_k: int = 5) -> list[tuple[str, float]]:
         tokens = _tokenize(query)
         scores: list[tuple[str, float]] = []

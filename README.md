@@ -145,6 +145,16 @@ Optional reranking and query expansion:
 - Query expansion + stopword handling are on by default; disable with
   `QUERY_EXPANSION_ENABLED=false`.
 
+Freshness weighting, citation validation, and background reindex:
+
+- Set `FRESHNESS_ENABLED=true` to boost newer sources in retrieval.
+- Tune decay with `FRESHNESS_HALF_LIFE_DAYS` and `FRESHNESS_WEIGHT`.
+- Optional per-source weights via `FRESHNESS_SOURCE_WEIGHTS` JSON.
+- Citation validation is on by default; toggle with `CITATION_VALIDATION_ENABLED`.
+- Set `REINDEX_ENABLED=true` to periodically reindex local files when changed.
+- Configure interval and scope with `REINDEX_INTERVAL_SECONDS` and
+  `REINDEX_MAX_DOCUMENTS`.
+
 ## Ingestion Scope
 
 This repo supports file-based ingestion only: PDFs, Markdown, and code docs.

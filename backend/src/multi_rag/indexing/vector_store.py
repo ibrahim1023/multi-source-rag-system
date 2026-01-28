@@ -20,6 +20,13 @@ class InMemoryVectorStore:
     def upsert(self, records: list[VectorRecord]) -> None:
         self._records.extend(records)
 
+    def delete_by_ids(self, record_ids: set[str]) -> None:
+        if not record_ids:
+            return
+        self._records = [
+            record for record in self._records if record.record_id not in record_ids
+        ]
+
     def search(self, query_vector: list[float], limit: int = 5) -> list[VectorRecord]:
         scored = [
             (self._cosine_similarity(query_vector, record.vector), record)

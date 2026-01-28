@@ -45,3 +45,12 @@ class Indexer:
                 [chunk.chunk_id for chunk in chunks],
                 [chunk.chunk_text for chunk in chunks],
             )
+
+    def remove_document(self, doc_id: str) -> None:
+        chunks = self._stores.metadata_store.list_chunks(doc_id)
+        if not chunks:
+            return
+        chunk_ids = [chunk.chunk_id for chunk in chunks]
+        self._stores.metadata_store.delete_chunks(doc_id)
+        self._stores.vector_store.delete_by_ids(set(chunk_ids))
+        self._stores.keyword_index.delete_documents(chunk_ids)

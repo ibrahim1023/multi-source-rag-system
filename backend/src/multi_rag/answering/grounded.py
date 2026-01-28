@@ -16,6 +16,7 @@ class AnsweringConfig:
     max_snippet_chars: int = 240
     high_confidence: float = 0.7
     medium_confidence: float = 0.45
+    validate_citations: bool = True
 
 
 class GroundedAnswerer:
@@ -44,6 +45,10 @@ class GroundedAnswerer:
             return self._refusal_response(query, confidence=0.0)
 
         claims = self._select_claims(candidates)
+        if self._config.validate_citations:
+            claims = _filter_orphan_claims(claims, context)
+            if not claims:
+                return self._refusal_response(query, confidence=0.0)
         confidence = _score_confidence(query_terms, results, claims)
         mode = _confidence_mode(confidence, self._config)
         if mode == "low":
@@ -199,3 +204,18 @@ def _dedupe_citations(citations: list[Citation]) -> list[Citation]:
         seen.add(citation.chunk_id)
         deduped.append(citation)
     return deduped
+
+
+def _filter_orphan_claims(claims: list[Claim], context: list[Chunk]) -> list[Claim]:
+    if not claims:
+        return []
+    valid_chunk_ids = {chunk.chunk_id for chunk in context}
+    filtered: list[Claim] = []
+    for claim in claims:
+        valid_citations = [
+            citation for citation in claim.citations if citation.chunk_id in valid_chunk_ids
+        ]
+        if not valid_citations:
+            continue
+        filtered.append(Claim(text=claim.text, citations=valid_citations))
+    return filtered

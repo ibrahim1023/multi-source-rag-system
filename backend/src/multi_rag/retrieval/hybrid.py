@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import math
 
 from multi_rag.indexing.bm25 import BM25Index
 from multi_rag.indexing.embeddings import EmbeddingProvider
@@ -33,6 +35,10 @@ class HybridRetriever:
         query_config: QueryExpansionConfig | None = None,
         reranker: Reranker | None = None,
         rerank_top_k: int = 8,
+        freshness_enabled: bool = False,
+        freshness_weight: float = 0.15,
+        freshness_half_life_days: float = 30.0,
+        freshness_source_weights: dict[str, float] | None = None,
     ) -> None:
         self._embedder = embedder
         self._vector_store = vector_store
@@ -43,6 +49,10 @@ class HybridRetriever:
         self._query_config = query_config or QueryExpansionConfig()
         self._reranker = reranker
         self._rerank_top_k = rerank_top_k
+        self._freshness_enabled = freshness_enabled
+        self._freshness_weight = freshness_weight
+        self._freshness_half_life_days = freshness_half_life_days
+        self._freshness_source_weights = freshness_source_weights or {}
 
     def retrieve(
         self,
@@ -81,6 +91,7 @@ class HybridRetriever:
                 self._vector_weight * vector_scores.get(chunk_id, 0.0)
                 + self._keyword_weight * keyword_scores.get(chunk_id, 0.0)
             )
+            score *= self._freshness_multiplier(chunk)
             scored.append(RetrievalResult(chunk_id=chunk_id,
                           score=score, payload=chunk.metadata))
 
@@ -178,9 +189,53 @@ class HybridRetriever:
             reranked_results.append(result)
         return reranked_results
 
+    def _freshness_multiplier(self, chunk: Chunk) -> float:
+        if not self._freshness_enabled:
+            return 1.0
+        timestamp = _extract_timestamp(chunk, self._metadata_store)
+        if not timestamp:
+            return 1.0
+        now = datetime.now(timezone.utc)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        age_days = max(0.0, (now - timestamp).total_seconds() / 86400.0)
+        half_life = max(self._freshness_half_life_days, 1e-6)
+        decay = math.exp(-age_days / half_life)
+        source_weight = self._freshness_source_weights.get(
+            chunk.metadata.get("source_type", ""), 1.0
+        )
+        boost = self._freshness_weight * decay * source_weight
+        return 1.0 + max(0.0, boost)
+
 
 def _matches_filter(metadata: dict, filters: dict) -> bool:
     for key, value in filters.items():
         if metadata.get(key) != value:
             return False
     return True
+
+
+def _extract_timestamp(
+    chunk: Chunk,
+    metadata_store: InMemoryMetadataStore | PostgresMetadataStore,
+) -> datetime | None:
+    for key in ("updated_at", "created_at"):
+        value = chunk.metadata.get(key)
+        parsed = _parse_timestamp(value)
+        if parsed:
+            return parsed
+    document = metadata_store.get_document(chunk.doc_id)
+    if not document:
+        return None
+    if document.updated_at:
+        return document.updated_at
+    return document.created_at
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
