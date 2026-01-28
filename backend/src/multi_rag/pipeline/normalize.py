@@ -9,6 +9,7 @@ from multi_rag.models import Chunk, Document, RawDocument
 from multi_rag.pipeline.chunking import ChunkConfig, chunk_text
 from multi_rag.pipeline.cleaning import strip_boilerplate
 from multi_rag.pipeline.metadata import merge_metadata
+from multi_rag.pipeline.quality import is_low_quality_chunk
 
 
 def normalize_document(raw: RawDocument) -> Document:
@@ -36,6 +37,7 @@ def build_chunks(
     cleaned = strip_boilerplate(raw_text)
     config = chunk_config or ChunkConfig()
     chunks_text = chunk_text(cleaned, config=config, source_type=document.source_type)
+    chunks_text = [text for text in chunks_text if not is_low_quality_chunk(text)]
     base = base_metadata or {}
     chunks: list[Chunk] = []
     for idx, text in enumerate(chunks_text):

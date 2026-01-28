@@ -23,7 +23,13 @@ class Indexer:
     def __init__(self, stores: IndexerStores) -> None:
         self._stores = stores
 
-    def index_document(self, document: Document, chunks: list[Chunk]) -> None:
+    def index_document(
+        self,
+        document: Document,
+        chunks: list[Chunk],
+        *,
+        include_bm25: bool = True,
+    ) -> None:
         self._stores.metadata_store.upsert_document(document)
         for chunk in chunks:
             self._stores.metadata_store.upsert_chunk(chunk)
@@ -34,7 +40,8 @@ class Indexer:
             for chunk, vector in zip(chunks, vectors)
         ]
         self._stores.vector_store.upsert(records)
-        self._stores.keyword_index.add_documents(
-            [chunk.chunk_id for chunk in chunks],
-            [chunk.chunk_text for chunk in chunks],
-        )
+        if include_bm25:
+            self._stores.keyword_index.add_documents(
+                [chunk.chunk_id for chunk in chunks],
+                [chunk.chunk_text for chunk in chunks],
+            )

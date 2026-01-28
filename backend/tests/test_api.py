@@ -88,3 +88,20 @@ def test_ingest_file_flow() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["chunks_indexed"] == 1
+
+
+def test_ingest_rejects_low_quality_text() -> None:
+    settings = APISettings(metadata_backend="memory", embedding_provider="hash", embedding_dim=8)
+    dependencies = build_dependencies(settings)
+    app = create_app(settings=settings, dependencies=dependencies)
+
+    client = TestClient(app)
+    ingest_payload = {
+        "title": "Noise",
+        "origin": "/tmp/noise.md",
+        "text": "//////",
+        "metadata": {},
+    }
+    response = client.post("/ingest/markdown", json=ingest_payload)
+    assert response.status_code == 422
+

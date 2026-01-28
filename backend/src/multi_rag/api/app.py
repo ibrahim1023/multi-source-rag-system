@@ -10,7 +10,6 @@ import os
 import json
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-import httpx
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -42,9 +41,10 @@ from multi_rag.indexing.vector_store import InMemoryVectorStore
 from multi_rag.models import RawDocument
 from multi_rag.observability.tracing import NullTracer, Tracer
 from multi_rag.pipeline.normalize import normalize_and_chunk
+from multi_rag.pipeline.quality import is_low_quality_ingest
 from multi_rag.retrieval.hybrid import HybridRetriever
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 
 @dataclass
@@ -58,6 +58,7 @@ class APISettings:
     context_max_chunks: int = 6
     neighbor_window: int = 1
     allowed_origins: list[str] = field(default_factory=list)
+    bm25_path: str | None = None
 
 
 @dataclass
@@ -69,6 +70,8 @@ class AppDependencies:
     pipeline: AnsweringPipeline
     tracer: Tracer
     ingest_log: InMemoryIngestLog
+    bm25_loaded: bool = False
+    bm25_path: str | None = None
 
 
 def _select_metadata_store(settings: APISettings) -> InMemoryMetadataStore | PostgresMetadataStore:
@@ -95,7 +98,11 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
     metadata_store = _select_metadata_store(settings)
     embedder = _select_embedder(settings)
     vector_store = InMemoryVectorStore()
-    keyword_index = BM25Index()
+    keyword_index = BM25Index(persist_path=settings.bm25_path)
+    bm25_loaded = False
+    if settings.bm25_path and os.path.exists(settings.bm25_path):
+        keyword_index.load(settings.bm25_path)
+        bm25_loaded = True
     stores = IndexerStores(
         embedder=embedder,
         vector_store=vector_store,
@@ -128,6 +135,8 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
         pipeline=pipeline,
         tracer=active_tracer,
         ingest_log=InMemoryIngestLog(),
+        bm25_loaded=bm25_loaded,
+        bm25_path=settings.bm25_path,
     )
 
 
@@ -135,13 +144,17 @@ def _rehydrate_indexes(dependencies: AppDependencies) -> None:
     documents = dependencies.metadata_store.list_documents()
     if not documents:
         return
+    total = len(documents)
     indexed = 0
+    logger.info("Rehydrating %s document(s) into in-memory indexes...", total)
     for document in documents:
         chunks = dependencies.metadata_store.list_chunks(document.doc_id)
         if not chunks:
             continue
-        dependencies.indexer.index_document(document, chunks)
+        dependencies.indexer.index_document(document, chunks, include_bm25=not dependencies.bm25_loaded)
         indexed += 1
+        if indexed % 25 == 0 or indexed == total:
+            logger.info("Rehydration progress: %s/%s documents indexed.", indexed, total)
     if indexed:
         logger.info("Rehydrated %s document(s) into in-memory indexes.", indexed)
 
@@ -159,33 +172,14 @@ def _extract_pdf_text(content_bytes: bytes) -> str:
     return text.replace("\x00", "")
 
 
-def _looks_like_url(text: str) -> bool:
-    candidate = text.strip()
-    if not candidate or " " in candidate:
-        return False
-    return candidate.startswith("http://") or candidate.startswith("https://")
 
 
-def _extract_html_text(html: str) -> str:
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError as exc:  # pragma: no cover - runtime only
-        raise RuntimeError("beautifulsoup4 is required for web ingestion.") from exc
-
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-    text = " ".join(item.strip() for item in soup.stripped_strings)
-    return text.strip()
-
-
-def _fetch_url_text(url: str) -> str:
-    try:
-        response = httpx.get(url, timeout=15.0, follow_redirects=True)
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=422, detail=f"Failed to fetch URL: {url}") from exc
-    return _extract_html_text(response.text)
+def _validate_ingest_text(text: str, *, source_type: str) -> None:
+    if is_low_quality_ingest(text, source_type=source_type):
+        raise HTTPException(
+            status_code=422,
+            detail="Extracted text is empty or too low-quality to ingest.",
+        )
 
 
 def create_app(settings: APISettings | None = None, dependencies: AppDependencies | None = None) -> FastAPI:
@@ -221,7 +215,13 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
             metadata=payload.metadata,
         )
         try:
+            _validate_ingest_text(payload.text, source_type=source_type)
             document, chunks = normalize_and_chunk(raw)
+            if not chunks:
+                raise HTTPException(
+                    status_code=422,
+                    detail="No usable chunks were produced after cleaning.",
+                )
             dependencies.indexer.index_document(document, chunks)
             dependencies.tracer.record_event(
                 "ingest.completed",
@@ -286,7 +286,13 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
             metadata=metadata,
         )
         try:
+            _validate_ingest_text(text, source_type=source_type)
             document, chunks = normalize_and_chunk(raw)
+            if not chunks:
+                raise HTTPException(
+                    status_code=422,
+                    detail="No usable chunks were produced after cleaning.",
+                )
             dependencies.indexer.index_document(document, chunks)
             dependencies.tracer.record_event(
                 "ingest.completed",
@@ -324,28 +330,6 @@ def create_app(settings: APISettings | None = None, dependencies: AppDependencie
         metadata: str | None = Form(None),
     ) -> IngestResponse:
         return ingest_file("pdf", title=title, origin=origin, file=file, metadata_json=metadata)
-
-    @app.post("/ingest/web", response_model=IngestResponse)
-    def ingest_web(payload: IngestRequest) -> IngestResponse:
-        text = payload.text
-        origin = payload.origin
-        if _looks_like_url(text):
-            url = text.strip()
-            text = _fetch_url_text(url)
-            if not text:
-                raise HTTPException(
-                    status_code=422,
-                    detail="No text could be extracted from the URL.",
-                )
-            if not origin:
-                origin = url
-            payload = IngestRequest(
-                title=payload.title,
-                origin=origin,
-                text=text,
-                metadata=payload.metadata,
-            )
-        return ingest("web", payload)
 
     @app.post("/ingest/markdown", response_model=IngestResponse)
     def ingest_markdown(payload: IngestRequest) -> IngestResponse:
@@ -450,4 +434,5 @@ def _settings_from_env() -> APISettings:
         context_max_chunks=int(os.getenv("CONTEXT_MAX_CHUNKS", "6")),
         neighbor_window=int(os.getenv("NEIGHBOR_WINDOW", "1")),
         allowed_origins=origins,
+        bm25_path=os.getenv("BM25_PATH"),
     )

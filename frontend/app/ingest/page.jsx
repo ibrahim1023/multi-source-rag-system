@@ -10,7 +10,6 @@ const DEFAULT_METADATA = `{
 const SOURCE_TYPES = [
   { id: "markdown", label: "Markdown" },
   { id: "pdf", label: "PDF" },
-  { id: "web", label: "Web" },
   { id: "code", label: "Code Docs" }
 ];
 
@@ -29,16 +28,9 @@ const SOURCE_CONFIG = {
     textPlaceholder: "Paste extracted PDF text here.",
     metadataHint: "Include page or section metadata if available."
   },
-  web: {
-    title: "Incident Runbook",
-    origin: "https://docs.example.com/runbook",
-    textLabel: "Web URL or Extracted Content",
-    textPlaceholder: "Paste a URL or the extracted web page content here.",
-    metadataHint: "Include canonical URL or crawl metadata."
-  },
   code: {
     title: "API Reference",
-    origin: "https://github.com/org/repo/docs/api.md",
+    origin: "/docs/api.md",
     textLabel: "Extracted Code Docs Text",
     textPlaceholder: "Paste extracted README or docstring content here.",
     metadataHint: "Include repo path or module info."

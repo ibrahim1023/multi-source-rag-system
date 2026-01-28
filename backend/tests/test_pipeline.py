@@ -6,6 +6,7 @@ from multi_rag.models import RawDocument
 from multi_rag.pipeline.chunking import ChunkConfig, chunk_text
 from multi_rag.pipeline.cleaning import strip_boilerplate
 from multi_rag.pipeline.normalize import normalize_and_chunk
+from multi_rag.pipeline.quality import is_low_quality_chunk
 
 
 def test_strip_boilerplate_collapses_whitespace() -> None:
@@ -37,3 +38,8 @@ def test_normalize_and_chunk_builds_document_and_chunks() -> None:
     assert len(chunks) == 1
     assert chunks[0].doc_id == document.doc_id
     assert chunks[0].metadata["source_type"] == "markdown"
+
+
+def test_chunk_quality_filters_noise() -> None:
+    assert is_low_quality_chunk("///////")
+    assert not is_low_quality_chunk("Hello world")

@@ -66,6 +66,11 @@ Environment loading:
 
 - The API auto-loads `backend/.env` on startup using `python-dotenv`.
 
+BM25 persistence:
+
+- Set `BM25_PATH` to a writable file path to persist the BM25 index.
+- The API loads the BM25 index from this path on startup if it exists.
+
 If you want higher-quality embeddings, set:
 
 ```
@@ -125,11 +130,9 @@ JSON string, and `file`.
 PDF upload extracts text with `pypdf`. Image-only PDFs will return a 422 error
 because no selectable text can be extracted.
 
-## Web Ingestion
+## Ingestion Scope
 
-The web ingest endpoint accepts either raw page text or a URL. If a URL is
-provided, the backend fetches the page and extracts readable text before
-indexing.
+This repo supports file-based ingestion only: PDFs, Markdown, and code docs.
 
 ## Repo Map
 
