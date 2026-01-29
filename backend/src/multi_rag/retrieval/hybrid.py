@@ -9,7 +9,7 @@ import math
 from multi_rag.indexing.bm25 import BM25Index
 from multi_rag.indexing.embeddings import EmbeddingProvider
 from multi_rag.indexing.metadata_store import InMemoryMetadataStore, PostgresMetadataStore
-from multi_rag.indexing.vector_store import InMemoryVectorStore
+from multi_rag.indexing.vector_store import VectorStore
 from multi_rag.models import Chunk
 from multi_rag.retrieval.query_expansion import QueryExpansionConfig, expand_query
 from multi_rag.retrieval.reranker import Reranker
@@ -27,7 +27,7 @@ class HybridRetriever:
         self,
         *,
         embedder: EmbeddingProvider,
-        vector_store: InMemoryVectorStore,
+        vector_store: VectorStore,
         keyword_index: BM25Index,
         metadata_store: InMemoryMetadataStore | PostgresMetadataStore,
         vector_weight: float = 0.7,

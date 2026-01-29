@@ -39,7 +39,7 @@ from multi_rag.indexing.metadata_store import (
     PostgresConfig,
     PostgresMetadataStore,
 )
-from multi_rag.indexing.vector_store import InMemoryVectorStore
+from multi_rag.indexing.vector_store import InMemoryVectorStore, QdrantVectorStore, VectorStore
 from multi_rag.models import RawDocument
 from multi_rag.observability.tracing import Tracer, build_tracer
 from multi_rag.pipeline.normalize import normalize_and_chunk
@@ -56,6 +56,9 @@ class APISettings:
     embedding_provider: str = "hash"
     embedding_dim: int = 8
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "multi_rag"
     llm_model: str | None = None
     google_api_key: str | None = None
     top_k: int = 5
@@ -122,6 +125,16 @@ def _select_embedder(settings: APISettings):
     return HashEmbeddingProvider(dim=settings.embedding_dim)
 
 
+def _select_vector_store(settings: APISettings) -> VectorStore:
+    if settings.qdrant_url:
+        return QdrantVectorStore(
+            url=settings.qdrant_url,
+            api_key=settings.qdrant_api_key,
+            collection=settings.qdrant_collection,
+        )
+    return InMemoryVectorStore()
+
+
 def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -> AppDependencies:
     active_tracer = tracer or build_tracer(
         settings.observability_mode,
@@ -130,7 +143,7 @@ def build_dependencies(settings: APISettings, *, tracer: Tracer | None = None) -
     )
     metadata_store = _select_metadata_store(settings)
     embedder = _select_embedder(settings)
-    vector_store = InMemoryVectorStore()
+    vector_store = _select_vector_store(settings)
     keyword_index = BM25Index(persist_path=settings.bm25_path)
     bm25_loaded = False
     if settings.bm25_path and os.path.exists(settings.bm25_path):
@@ -611,6 +624,9 @@ def _settings_from_env() -> APISettings:
         embedding_model=os.getenv(
             "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
         ),
+        qdrant_url=os.getenv("QDRANT_URL") or None,
+        qdrant_api_key=os.getenv("QDRANT_API_KEY") or None,
+        qdrant_collection=os.getenv("QDRANT_COLLECTION", "multi_rag"),
         llm_model=os.getenv("LLM_MODEL") or None,
         google_api_key=os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or None,
         top_k=int(os.getenv("TOP_K", "5")),

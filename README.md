@@ -5,16 +5,19 @@ internal company docs across PDFs, Markdown notes, and code documentation.
 
 ## Overview
 
-- Purpose: demo-ready RAG system with grounded answers and citations.
+- Purpose: demo-ready RAG system with grounded answers and citations over local files.
 - Stack: FastAPI backend + Next.js frontend.
 - Scope: file-based ingestion only (PDF, Markdown, code docs).
+- Designed for: reproducible demos, offline evaluation, and clear auditability.
 
 ## Highlights
 
-- Hybrid retrieval (vector + BM25) with reranking and query expansion.
-- Grounded answering with per-claim citations and confidence policy.
+- Hybrid retrieval (vector + BM25) with optional reranking and query expansion.
+- Grounded answering with per-claim citations, confidence policy, and refusals.
 - Ingestion quality checks, OCR fallback, and background reindexing.
+- Citation validation to block orphan claims.
 - Offline eval harness and structured observability logs.
+- Optional Qdrant vector store and Postgres metadata store.
 
 ## Architecture (at a glance)
 
@@ -23,6 +26,13 @@ internal company docs across PDFs, Markdown notes, and code documentation.
 - Retrieve: hybrid search + rerank + context assembly.
 - Answer: grounded claims + citations + refusal behavior.
 - Serve: ingest, search, chat APIs + web UI.
+
+## Why this is demo-ready
+
+- Deterministic pipeline options for repeatable results (hash embeddings, BM25 persistence).
+- Rehydration on startup from Postgres metadata (no full reingest required).
+- Clear knobs for quality, speed, and cost (TOP_K, reranker, query expansion).
+- Built-in evaluation harness for regression checks.
 
 ## Quickstart
 
@@ -82,6 +92,12 @@ BM25 persistence:
 - Set `BM25_PATH` to a writable file path.
 - The API loads the BM25 index from this path on startup if it exists.
 
+Qdrant vector store:
+
+- Set `QDRANT_URL` to your Qdrant endpoint (cloud or self-hosted).
+- Optionally set `QDRANT_API_KEY` and `QDRANT_COLLECTION` (defaults to `multi_rag`).
+- When `QDRANT_URL` is set, vectors are stored and searched in Qdrant.
+
 Postgres metadata:
 
 - Set `DATABASE_URL` (and optionally `METADATA_BACKEND=postgres`).
@@ -98,6 +114,11 @@ Observability:
 
 - Set `OBSERVABILITY_MODE=structured` for JSON logs.
 - Use `OBSERVABILITY_SERVICE_NAME` and `OBSERVABILITY_STATIC_FIELDS` for tags.
+
+Operational notes:
+
+- Startup can be slower on large corpora due to rehydration.
+- If you switch embedding models, reingest to avoid mixed vector spaces.
 
 ## Tests
 
